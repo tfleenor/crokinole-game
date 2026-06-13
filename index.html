@@ -60,8 +60,9 @@
   }
   button:active { filter: brightness(1.1); }
   #help { max-width: 520px; color: #a8957c; font-size: 0.85rem; line-height: 1.5; margin-top: 12px; }
-  #controls { display: flex; gap: 10px; margin-top: 10px; }
-  #newGame, #vsToggle { background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; }
+  #controls { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
+  #newGame, #vsToggle, #diffToggle { background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; padding: 10px 13px; font-size: 0.92rem; }
+  #diffToggle { display: none; }
   #place { display: none; align-items: center; gap: 10px; width: 100%; max-width: 520px; margin-top: 12px; }
   #place .parrow { color: #a8957c; font-size: 1.1rem; user-select: none; }
   #slider { flex: 1; height: 30px; accent-color: #b07a33; }
@@ -93,6 +94,7 @@
 
   <div id="controls">
     <button id="vsToggle">Mode: 2 Players</button>
+    <button id="diffToggle">Difficulty: Medium</button>
     <button id="newGame">New Game</button>
   </div>
 
@@ -169,6 +171,13 @@
   let lastFoul = null;     // reason string of the most recent foul (or null)
   let msgTimer = null;
   let vsCPU = false;       // is Player 2 the computer?
+  let aiLevel = "Medium";
+  const AI_ORDER = ["Easy", "Medium", "Hard"];
+  const AI_LEVELS = {       // ang/pow = jitter spread (bigger = less accurate)
+    Easy: { ang: 0.24, pow: 0.36 },
+    Medium: { ang: 0.10, pow: 0.16 },
+    Hard: { ang: 0.035, pow: 0.07 },
+  };
   const MID_DEFAULT = "Use the slider to position,<br>then drag the board to flick";
 
   function newGame() {
@@ -217,9 +226,10 @@
       tx = best.x; ty = best.y;
       power = dist(active.x, active.y, tx, ty) * 0.018 + 2.2;  // hit hard enough to clear it
     }
+    const lv = AI_LEVELS[aiLevel];
     let ang = Math.atan2(ty - active.y, tx - active.x);
-    ang += (Math.random() - 0.5) * 0.10;                 // aim jitter (~±3°)
-    power *= 0.92 + Math.random() * 0.16;                // power jitter (±8%)
+    ang += (Math.random() - 0.5) * lv.ang;               // aim jitter (scales with difficulty)
+    power *= (1 - lv.pow / 2) + Math.random() * lv.pow;  // power jitter (scales with difficulty)
     power = Math.min(power, MAX_SPEED);
     flick(Math.cos(ang) * power, Math.sin(ang) * power);
   }
@@ -562,7 +572,12 @@
   document.getElementById("vsToggle").addEventListener("click", function () {
     vsCPU = !vsCPU;
     this.textContent = "Mode: " + (vsCPU ? "vs Computer" : "2 Players");
+    document.getElementById("diffToggle").style.display = vsCPU ? "inline-block" : "none";
     newGame();
+  });
+  document.getElementById("diffToggle").addEventListener("click", function () {
+    aiLevel = AI_ORDER[(AI_ORDER.indexOf(aiLevel) + 1) % AI_ORDER.length];
+    this.textContent = "Difficulty: " + aiLevel;
   });
 
   // test hook (harmless; used for automated render/physics checks)
@@ -575,6 +590,7 @@
     tick(n) { for (let i = 0; i < n && phase === "sim"; i++) step(); }, // deterministic stepping for tests
     redraw() { draw(); },
     setMode(b) { vsCPU = b; },
+    setLevel(l) { aiLevel = l; },
     cpu() { aiMove(); },
   };
 

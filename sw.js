@@ -1,4 +1,4 @@
-const CACHE = "crok-game-v7";
+const CACHE = "crok-game-v8";
 const ASSETS = [
   ".",
   "index.html",
