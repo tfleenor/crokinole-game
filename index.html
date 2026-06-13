@@ -62,6 +62,9 @@
   #help { max-width: 520px; color: #a8957c; font-size: 0.85rem; line-height: 1.5; margin-top: 12px; }
   #controls { display: flex; gap: 10px; margin-top: 10px; }
   #newGame, #vsToggle { background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; }
+  #place { display: none; align-items: center; gap: 10px; width: 100%; max-width: 520px; margin-top: 12px; }
+  #place .parrow { color: #a8957c; font-size: 1.1rem; user-select: none; }
+  #slider { flex: 1; height: 30px; accent-color: #b07a33; }
 </style>
 </head>
 <body>
@@ -69,7 +72,7 @@
 
   <div id="status">
     <div class="pscore" id="p0"><div class="nm">Player 1</div><div class="sc">0</div><div class="dl">8 discs</div></div>
-    <div id="mid">Slide the disc to place it,<br>then drag to aim &amp; flick</div>
+    <div id="mid">Use the slider to position,<br>then drag the board to flick</div>
     <div class="pscore" id="p1"><div class="nm">Player 2</div><div class="sc">0</div><div class="dl">8 discs</div></div>
   </div>
 
@@ -82,6 +85,12 @@
     </div></div>
   </div>
 
+  <div id="place">
+    <span class="parrow">◀</span>
+    <input type="range" id="slider" min="0" max="1000" value="500" aria-label="Position disc along your line">
+    <span class="parrow">▶</span>
+  </div>
+
   <div id="controls">
     <button id="vsToggle">Mode: 2 Players</button>
     <button id="newGame">New Game</button>
@@ -89,9 +98,9 @@
 
   <div id="help">
     <strong>How to play:</strong> Players take turns. On your turn a disc appears
-    at the outer edge of your quadrant — <strong>slide the disc</strong> along that edge
-    to position it, then <strong>drag from the open board</strong> in the direction you
-    want to shoot (further drag = more power) and release to flick. Land in the centre hole for 20, or score by
+    at the outer edge of your quadrant — use the <strong>slider</strong> below the board
+    to position it along your line, then <strong>drag anywhere on the board</strong> in
+    the direction you want to shoot (further drag = more power) and release to flick. Land in the centre hole for 20, or score by
     ring (15 / 10 / 5). Discs knocked into the ditch are out. <strong>If your opponent
     has a disc on the board you must hit one</strong> (directly or off your own discs)
     or your shot is removed; on an open board your shot must reach the centre 20 zone.
@@ -159,9 +168,8 @@
   let shot = null;         // per-shot tracking for the must-hit rule
   let lastFoul = null;     // reason string of the most recent foul (or null)
   let msgTimer = null;
-  let dragMode = null;     // null | "move" (sliding the disc) | "aim"
   let vsCPU = false;       // is Player 2 the computer?
-  const MID_DEFAULT = "Slide the disc to place it,<br>then drag to aim & flick";
+  const MID_DEFAULT = "Use the slider to position,<br>then drag the board to flick";
 
   function newGame() {
     discs = [];
@@ -182,6 +190,7 @@
     active = { x: cx + START_R * Math.cos(a), y: cy + START_R * Math.sin(a), vx: 0, vy: 0, player: turn, flicked: false };
     discs.push(active);
     phase = "aim";
+    document.getElementById("slider").value = 500;   // disc starts centred in the quadrant
     if (vsCPU && turn === 1) {
       document.getElementById("mid").innerHTML = "Computer is lining up…";
       setTimeout(aiMove, 850);
@@ -421,6 +430,7 @@
     else { res.textContent = (s0 > s1 ? "Player 1" : "Player 2") + " wins!"; }
     sub.textContent = "Player 1 " + s0 + "  –  " + s1 + " Player 2";
     document.getElementById("overlay").style.display = "flex";
+    updateHud();
   }
 
   // ---- HUD ----
@@ -431,6 +441,8 @@
     document.querySelector("#p1 .dl").textContent = left[1] + " discs";
     document.getElementById("p0").classList.toggle("turn", phase !== "over" && turn === 0);
     document.getElementById("p1").classList.toggle("turn", phase !== "over" && turn === 1);
+    const human = phase === "aim" && active && !(vsCPU && turn === 1);
+    document.getElementById("place").style.display = human ? "flex" : "none";
   }
 
   // ---- rendering ----
@@ -468,22 +480,14 @@
       ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(d.x, d.y, discR, 0, 7); ctx.stroke();
     }
-    // placement hint: the arc the active disc can slide along (its quadrant edge)
-    if (phase === "aim" && active) {
+    // placement arc: the range the slider can position the disc along
+    if (phase === "aim" && active && !(vsCPU && turn === 1)) {
       const q = QUAD[turn];
       ctx.strokeStyle = "rgba(255,255,255,0.2)";
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 6]);
       ctx.beginPath(); ctx.arc(cx, cy, START_R, q.lo, q.hi); ctx.stroke();
       ctx.setLineDash([]);
-      if (!aim) {
-        const dl = Math.hypot(cx - active.x, cy - active.y) || 1;
-        ctx.fillStyle = "rgba(255,255,255,0.4)";
-        ctx.font = (discR * 1.1) + "px system-ui";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("↔", active.x + (cx - active.x) / dl * (discR + 12), active.y + (cy - active.y) / dl * (discR + 12));
-      }
     }
     // aim guide
     if (phase === "aim" && aim && active) {
@@ -519,48 +523,38 @@
       y: (e.clientY - rect.top) / rect.height * W,
     };
   }
-  const GRAB = discR * 1.3;          // touch within this of the disc = slide it
-  function placeOnArc(px, py) {
-    const q = QUAD[turn];
-    const a = Math.max(q.lo, Math.min(q.hi, Math.atan2(py - cy, px - cx)));
-    return { x: cx + START_R * Math.cos(a), y: cy + START_R * Math.sin(a) };
-  }
+  // Dragging on the board always aims & flicks; the slider handles positioning.
   canvas.addEventListener("pointerdown", (e) => {
     if (phase !== "aim" || !active) return;
     if (vsCPU && turn === 1) return;          // computer's turn — no human input
     canvas.setPointerCapture(e.pointerId);
-    const p = pointFromEvent(e);
-    if (Math.hypot(p.x - active.x, p.y - active.y) <= GRAB) {
-      dragMode = "move";
-    } else {
-      dragMode = "aim";
-      aim = p;
-    }
+    aim = pointFromEvent(e);
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (phase !== "aim" || !dragMode) return;
-    const p = pointFromEvent(e);
-    if (dragMode === "move") {
-      const pos = placeOnArc(p.x, p.y);
-      active.x = pos.x; active.y = pos.y;
-    } else {
-      aim = p;
-    }
+    if (phase !== "aim" || !aim) return;
+    aim = pointFromEvent(e);
   });
   canvas.addEventListener("pointerup", (e) => {
-    if (phase !== "aim" || !active) return;
-    const mode = dragMode;
-    dragMode = null;
-    if (mode === "move") return;       // repositioned; still your shot
-    if (mode !== "aim" || !aim) { aim = null; return; }
+    if (phase !== "aim" || !aim || !active) return;
     const p = pointFromEvent(e);
     const dx = p.x - active.x, dy = p.y - active.y;
     const len = Math.hypot(dx, dy);
     aim = null;
-    if (len < 6) return; // too small, ignore
+    if (len < discR) return; // ignore tiny taps so the disc isn't nudged by accident
     const pow = Math.min(len, MAX_DRAG) / MAX_DRAG * MAX_SPEED;
     const ang = Math.atan2(dy, dx);
     flick(Math.cos(ang) * pow, Math.sin(ang) * pow);
+  });
+
+  // Slider slides the active disc along its quadrant arc (slider right = screen right).
+  document.getElementById("slider").addEventListener("input", function () {
+    if (phase !== "aim" || !active || (vsCPU && turn === 1)) return;
+    const q = QUAD[turn];
+    const right = Math.cos(q.lo) > Math.cos(q.hi) ? q.lo : q.hi;
+    const left = Math.cos(q.lo) > Math.cos(q.hi) ? q.hi : q.lo;
+    const a = left + (this.value / 1000) * (right - left);
+    active.x = cx + START_R * Math.cos(a);
+    active.y = cy + START_R * Math.sin(a);
   });
 
   document.getElementById("newGame").addEventListener("click", newGame);
