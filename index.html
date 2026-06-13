@@ -127,7 +127,9 @@
   const DISCS_PER_PLAYER = 8;
   const FRICTION = 0.985;
   const STOP = 0.05;
-  const SINK = R * 0.02;
+  const SINK = R * 0.012;        // disc must be nearly settled to drop in
+  const DROP_R = R * 0.03;       // and nearly centred over the hole (precision)
+  const HOLE_FRICTION = 0.95;    // a little extra drag over the hole (forgiveness)
   const REST_DISC = 0.9;
   const REST_PEG = 0.55;
   const SUBSTEPS = 6;
@@ -241,6 +243,8 @@
       if (d === active && !d.flicked) continue;
       d.vx *= FRICTION;
       d.vy *= FRICTION;
+      // the hole's lip adds a little extra friction, helping a slow disc settle in
+      if (dist(d.x, d.y, cx, cy) < holeR) { d.vx *= HOLE_FRICTION; d.vy *= HOLE_FRICTION; }
       if (speed(d) < STOP) { d.vx = 0; d.vy = 0; }
     }
     // remove sunk 20s and ditched discs
@@ -248,7 +252,7 @@
       const d = discs[i];
       if (d === active && !d.flicked) continue;
       const r = dist(d.x, d.y, cx, cy);
-      if (r < holeR && speed(d) < SINK) {
+      if (r < DROP_R && speed(d) < SINK) {
         if (shot && d.player === shot.player) {
           // own 20s are deferred until the foul check (a foul voids them)
           if (d === shot.shooter) shot.shooterSunk = true; else shot.ownSunk++;
