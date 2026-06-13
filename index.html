@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1b1410">
+<title>Crokinole</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    background: #1b1410;
+    color: #f3ead9;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 12px;
+  }
+  h1 { font-size: 1.3rem; margin: 4px 0 10px; color: #d4a04c; letter-spacing: 1px; }
+  #status {
+    width: 100%;
+    max-width: 520px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 0.95rem;
+  }
+  .pscore { text-align: center; flex: 1; }
+  .pscore .nm { font-size: 0.8rem; color: #a8957c; }
+  .pscore .sc { font-size: 1.6rem; font-weight: 700; line-height: 1.1; }
+  .pscore.turn { color: #d4a04c; }
+  .pscore.turn .nm { color: #d4a04c; }
+  #mid { font-size: 0.8rem; color: #a8957c; text-align: center; flex: 1; }
+  #wrap { position: relative; width: 100%; max-width: 520px; }
+  canvas { width: 100%; aspect-ratio: 1 / 1; display: block; border-radius: 50%; touch-action: none; }
+  #overlay {
+    position: absolute; inset: 0;
+    display: none;
+    align-items: center; justify-content: center;
+    background: rgba(15,10,6,0.72);
+    border-radius: 50%;
+  }
+  #overlay .card {
+    background: #2a211a; border: 2px solid #d4a04c; border-radius: 16px;
+    padding: 22px 26px; text-align: center;
+  }
+  #overlay h2 { margin: 0 0 6px; color: #d4a04c; }
+  #overlay p { margin: 0 0 16px; color: #a8957c; }
+  button {
+    background: linear-gradient(180deg,#c8924a,#a06a28); color: #fff;
+    border: none; border-radius: 10px; padding: 11px 18px;
+    font-size: 1rem; font-weight: 600; cursor: pointer;
+  }
+  button:active { filter: brightness(1.1); }
+  #help { max-width: 520px; color: #a8957c; font-size: 0.85rem; line-height: 1.5; margin-top: 12px; }
+  #newGame { margin-top: 10px; background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; }
+</style>
+</head>
+<body>
+  <h1>CROKINOLE</h1>
+
+  <div id="status">
+    <div class="pscore" id="p0"><div class="nm">Player 1</div><div class="sc">0</div><div class="dl">8 discs</div></div>
+    <div id="mid">Drag from your disc to aim,<br>release to flick</div>
+    <div class="pscore" id="p1"><div class="nm">Player 2</div><div class="sc">0</div><div class="dl">8 discs</div></div>
+  </div>
+
+  <div id="wrap">
+    <canvas id="board"></canvas>
+    <div id="overlay"><div class="card">
+      <h2 id="result">—</h2>
+      <p id="resultSub"></p>
+      <button id="again">Play Again</button>
+    </div></div>
+  </div>
+
+  <button id="newGame">New Game</button>
+
+  <div id="help">
+    <strong>How to play:</strong> Players take turns. On your turn a disc appears
+    at your edge — press and drag in the direction you want to shoot (further drag =
+    more power), then release to flick. Land in the centre hole for 20, or score by
+    ring (15 / 10 / 5). Discs knocked into the ditch are out. Highest total after all
+    discs are played wins.
+  </div>
+
+<script>
+(function () {
+  "use strict";
+  const canvas = document.getElementById("board");
+  const ctx = canvas.getContext("2d");
+
+  // Fixed logical coordinate space; CSS scales the element responsively.
+  const W = 520;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = W * dpr;
+  canvas.height = W * dpr;
+  ctx.scale(dpr, dpr);
+
+  // ---- geometry ----
+  const cx = W / 2, cy = W / 2;
+  const R = W * 0.46;            // outer playing edge (rim); beyond = ditch
+  const ditchR = W * 0.49;
+  const line15 = R * 0.30;
+  const line10 = R * 0.55;
+  const holeR = R * 0.07;        // disc centre within this (and slow) = 20
+  const discR = R * 0.05;
+  const pegR = R * 0.02;
+  const pegOrbit = R * 0.33;
+  const PEGS = [];
+  for (let i = 0; i < 8; i++) {
+    const a = (i * 45 + 22.5) * Math.PI / 180;
+    PEGS.push({ x: cx + pegOrbit * Math.cos(a), y: cy + pegOrbit * Math.sin(a) });
+  }
+
+  // ---- tuning ----
+  const DISCS_PER_PLAYER = 8;
+  const FRICTION = 0.985;
+  const STOP = 0.05;
+  const SINK = R * 0.02;
+  const REST_DISC = 0.9;
+  const REST_PEG = 0.55;
+  const SUBSTEPS = 6;
+  const MAX_DRAG = R;
+  const MAX_SPEED = R * 0.065;
+  const COLORS = ["#e8c189", "#3a2b1d"]; // P1 natural, P2 dark
+  const EDGE = ["#9c6a2e", "#1a120b"];
+  const START = [
+    { x: cx, y: cy + R * 0.82 },  // P1 bottom
+    { x: cx, y: cy - R * 0.82 },  // P2 top
+  ];
+
+  // ---- state ----
+  let discs = [];          // {x,y,vx,vy,player,flicked}
+  let sunk = [0, 0];
+  let left = [0, 0];
+  let turn = 0;
+  let phase = "aim";       // "aim" | "sim" | "over"
+  let active = null;       // the disc awaiting a flick
+  let aim = null;          // {x,y} current pointer while dragging
+
+  function newGame() {
+    discs = [];
+    sunk = [0, 0];
+    left = [DISCS_PER_PLAYER, DISCS_PER_PLAYER];
+    turn = 0;
+    phase = "aim";
+    document.getElementById("overlay").style.display = "none";
+    spawnActive();
+    updateHud();
+  }
+
+  function spawnActive() {
+    if (left[turn] <= 0) { endGame(); return; }
+    active = { x: START[turn].x, y: START[turn].y, vx: 0, vy: 0, player: turn, flicked: false };
+    discs.push(active);
+    phase = "aim";
+  }
+
+  function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+  function speed(d) { return Math.hypot(d.vx, d.vy); }
+
+  function ringValue(d) {
+    const r = dist(d.x, d.y, cx, cy);
+    if (r <= line15) return 15;
+    if (r <= line10) return 10;
+    if (r <= R) return 5;
+    return 0;
+  }
+
+  function scoreOf(p) {
+    let s = sunk[p] * 20;
+    for (const d of discs) if (d.player === p && d.flicked) s += ringValue(d);
+    return s;
+  }
+
+  // ---- physics ----
+  function step() {
+    const sub = SUBSTEPS;
+    for (let s = 0; s < sub; s++) {
+      for (const d of discs) {
+        if (d === active && !d.flicked) continue;
+        d.x += d.vx / sub;
+        d.y += d.vy / sub;
+      }
+      // disc-disc
+      for (let i = 0; i < discs.length; i++) {
+        for (let j = i + 1; j < discs.length; j++) {
+          collideDiscs(discs[i], discs[j]);
+        }
+      }
+      // disc-peg
+      for (const d of discs) {
+        if (d === active && !d.flicked) continue;
+        for (const p of PEGS) collidePeg(d, p);
+      }
+    }
+    // friction + settle + removal
+    for (const d of discs) {
+      if (d === active && !d.flicked) continue;
+      d.vx *= FRICTION;
+      d.vy *= FRICTION;
+      if (speed(d) < STOP) { d.vx = 0; d.vy = 0; }
+    }
+    // remove sunk 20s and ditched discs
+    for (let i = discs.length - 1; i >= 0; i--) {
+      const d = discs[i];
+      if (d === active && !d.flicked) continue;
+      const r = dist(d.x, d.y, cx, cy);
+      if (r < holeR && speed(d) < SINK) { sunk[d.player]++; discs.splice(i, 1); continue; }
+      if (r > R + discR * 0.5) { discs.splice(i, 1); continue; } // into the ditch
+    }
+    // settled?
+    let moving = false;
+    for (const d of discs) { if (d !== active && speed(d) > 0) { moving = true; break; } }
+    if (!moving) afterSettle();
+  }
+
+  function collideDiscs(a, b) {
+    if ((a === active && !a.flicked) || (b === active && !b.flicked)) return;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    let d = Math.hypot(dx, dy);
+    const min = discR * 2;
+    if (d === 0) { d = 0.01; }
+    if (d >= min) return;
+    const nx = dx / d, ny = dy / d;
+    const overlap = min - d;
+    a.x -= nx * overlap / 2; a.y -= ny * overlap / 2;
+    b.x += nx * overlap / 2; b.y += ny * overlap / 2;
+    const rvx = a.vx - b.vx, rvy = a.vy - b.vy;
+    const vn = rvx * nx + rvy * ny;
+    if (vn <= 0) return;
+    const imp = (1 + REST_DISC) * vn / 2;
+    a.vx -= imp * nx; a.vy -= imp * ny;
+    b.vx += imp * nx; b.vy += imp * ny;
+  }
+
+  function collidePeg(d, p) {
+    const dx = d.x - p.x, dy = d.y - p.y;
+    let dd = Math.hypot(dx, dy);
+    const min = discR + pegR;
+    if (dd >= min) return;
+    if (dd === 0) dd = 0.01;
+    const nx = dx / dd, ny = dy / dd;
+    d.x = p.x + nx * min; d.y = p.y + ny * min;
+    const vn = d.vx * nx + d.vy * ny;
+    if (vn < 0) {
+      d.vx -= (1 + REST_PEG) * vn * nx;
+      d.vy -= (1 + REST_PEG) * vn * ny;
+    }
+  }
+
+  function afterSettle() {
+    const other = 1 - turn;
+    if (left[other] > 0) turn = other;
+    else if (left[turn] > 0) { /* same player continues */ }
+    else { endGame(); updateHud(); return; }
+    spawnActive();
+    updateHud();
+  }
+
+  function endGame() {
+    phase = "over";
+    active = null;
+    const s0 = scoreOf(0), s1 = scoreOf(1);
+    const res = document.getElementById("result");
+    const sub = document.getElementById("resultSub");
+    if (s0 === s1) { res.textContent = "It's a tie!"; }
+    else { res.textContent = (s0 > s1 ? "Player 1" : "Player 2") + " wins!"; }
+    sub.textContent = "Player 1 " + s0 + "  –  " + s1 + " Player 2";
+    document.getElementById("overlay").style.display = "flex";
+  }
+
+  // ---- HUD ----
+  function updateHud() {
+    document.querySelector("#p0 .sc").textContent = scoreOf(0);
+    document.querySelector("#p1 .sc").textContent = scoreOf(1);
+    document.querySelector("#p0 .dl").textContent = left[0] + " discs";
+    document.querySelector("#p1 .dl").textContent = left[1] + " discs";
+    document.getElementById("p0").classList.toggle("turn", phase !== "over" && turn === 0);
+    document.getElementById("p1").classList.toggle("turn", phase !== "over" && turn === 1);
+  }
+
+  // ---- rendering ----
+  function draw() {
+    ctx.clearRect(0, 0, W, W);
+    // ditch
+    ctx.fillStyle = "#2a1c10";
+    ctx.beginPath(); ctx.arc(cx, cy, ditchR, 0, 7); ctx.fill();
+    // board
+    ctx.fillStyle = "#d2a05c";
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.fill();
+    // rings
+    ctx.strokeStyle = "rgba(90,55,25,0.55)"; ctx.lineWidth = 2;
+    for (const rr of [R, line10, line15]) { ctx.beginPath(); ctx.arc(cx, cy, rr, 0, 7); ctx.stroke(); }
+    // quadrant lines (within the 15 ring, like a real board)
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - line15); ctx.lineTo(cx, cy + line15);
+    ctx.moveTo(cx - line15, cy); ctx.lineTo(cx + line15, cy);
+    ctx.stroke();
+    // centre hole
+    ctx.fillStyle = "#28180c";
+    ctx.beginPath(); ctx.arc(cx, cy, holeR, 0, 7); ctx.fill();
+    // pegs
+    ctx.fillStyle = "#3a2410";
+    for (const p of PEGS) { ctx.beginPath(); ctx.arc(p.x, p.y, pegR, 0, 7); ctx.fill(); }
+    // discs
+    for (const d of discs) {
+      const grad = ctx.createRadialGradient(d.x - discR * 0.3, d.y - discR * 0.3, discR * 0.2, d.x, d.y, discR);
+      grad.addColorStop(0, COLORS[d.player]);
+      grad.addColorStop(1, EDGE[d.player]);
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(d.x, d.y, discR, 0, 7); ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(d.x, d.y, discR, 0, 7); ctx.stroke();
+    }
+    // aim guide
+    if (phase === "aim" && aim && active) {
+      const dx = aim.x - active.x, dy = aim.y - active.y;
+      const len = Math.min(Math.hypot(dx, dy), MAX_DRAG);
+      const ang = Math.atan2(dy, dx);
+      const ex = active.x + Math.cos(ang) * len;
+      const ey = active.y + Math.sin(ang) * len;
+      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath(); ctx.moveTo(active.x, active.y); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.setLineDash([]);
+      // power ring on the active disc
+      const pow = len / MAX_DRAG;
+      ctx.strokeStyle = pow > 0.85 ? "#c4553d" : "#d4a04c";
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(active.x, active.y, discR + 4, -Math.PI / 2, -Math.PI / 2 + pow * 2 * Math.PI); ctx.stroke();
+    }
+  }
+
+  function loop() {
+    if (phase === "sim") step();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- input ----
+  function pointFromEvent(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) / rect.width * W,
+      y: (e.clientY - rect.top) / rect.height * W,
+    };
+  }
+  canvas.addEventListener("pointerdown", (e) => {
+    if (phase !== "aim" || !active) return;
+    canvas.setPointerCapture(e.pointerId);
+    aim = pointFromEvent(e);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (phase !== "aim" || !aim) return;
+    aim = pointFromEvent(e);
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    if (phase !== "aim" || !aim || !active) return;
+    const p = pointFromEvent(e);
+    const dx = p.x - active.x, dy = p.y - active.y;
+    const len = Math.hypot(dx, dy);
+    aim = null;
+    if (len < 6) return; // too small, ignore
+    const pow = Math.min(len, MAX_DRAG) / MAX_DRAG * MAX_SPEED;
+    const ang = Math.atan2(dy, dx);
+    active.vx = Math.cos(ang) * pow;
+    active.vy = Math.sin(ang) * pow;
+    active.flicked = true;
+    left[turn]--;
+    active = null;
+    phase = "sim";
+    updateHud();
+  });
+
+  document.getElementById("newGame").addEventListener("click", newGame);
+  document.getElementById("again").addEventListener("click", newGame);
+
+  // test hook (harmless; used for automated render/physics checks)
+  window.crok = {
+    launch(vx, vy) {
+      if (phase !== "aim" || !active) return;
+      active.vx = vx; active.vy = vy; active.flicked = true;
+      left[turn]--; active = null; phase = "sim"; updateHud();
+    },
+    state() { return { phase, turn, left: left.slice(), sunk: sunk.slice(), discs: discs.length, s0: scoreOf(0), s1: scoreOf(1) }; },
+    tick(n) { for (let i = 0; i < n && phase === "sim"; i++) step(); }, // deterministic stepping for tests
+    redraw() { draw(); },
+  };
+
+  newGame();
+  loop();
+
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+})();
+</script>
+</body>
+</html>
