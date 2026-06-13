@@ -21,7 +21,9 @@
     min-height: 100vh;
     padding: 12px;
   }
-  h1 { font-size: 1.3rem; margin: 4px 0 10px; color: #d4a04c; letter-spacing: 1px; }
+  h1 { font-size: 1.3rem; margin: 4px 0 2px; color: #d4a04c; letter-spacing: 1px; }
+  #roundLabel { color: #a8957c; font-size: 0.85rem; margin-bottom: 8px; min-height: 1em; }
+  #soundBtn { position: fixed; top: 6px; right: 10px; z-index: 60; background: none; border: none; font-size: 1.25rem; padding: 4px 8px; cursor: pointer; }
   #status {
     width: 100%;
     max-width: 520px;
@@ -61,7 +63,7 @@
   button:active { filter: brightness(1.1); }
   #help { max-width: 520px; color: #a8957c; font-size: 0.85rem; line-height: 1.5; margin-top: 12px; }
   #controls { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
-  #newGame, #vsToggle, #diffToggle, #recBtn { background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; padding: 10px 13px; font-size: 0.92rem; }
+  #newGame, #vsToggle, #diffToggle, #roundsBtn, #recBtn { background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; padding: 10px 13px; font-size: 0.92rem; }
   #diffToggle { display: none; }
   #records-modal {
     position: fixed; inset: 0; z-index: 50; display: none;
@@ -81,7 +83,9 @@
 </style>
 </head>
 <body>
+  <button id="soundBtn" aria-label="Toggle sound">🔊</button>
   <h1>CROKINOLE</h1>
+  <div id="roundLabel"></div>
 
   <div id="status">
     <div class="pscore" id="p0"><div class="nm">Player 1</div><div class="sc">0</div><div class="dl">8 discs</div></div>
@@ -107,6 +111,7 @@
   <div id="controls">
     <button id="vsToggle">Mode: 2 Players</button>
     <button id="diffToggle">Difficulty: Medium</button>
+    <button id="roundsBtn">Rounds: 2</button>
     <button id="newGame">New Game</button>
     <button id="recBtn">Records</button>
   </div>
@@ -203,18 +208,52 @@
   const MID_DEFAULT = "Use the slider to position,<br>then drag the board to flick";
   const STATS_KEY = "crok-game-stats-v1";
   let stats = loadStats();
+  // multi-round match
+  let matchRounds = 2;
+  let round = 1;
+  let matchScore = [0, 0];
+  let firstPlayer = 0;
+  const ROUND_OPTS = [1, 2, 4];
+  // sound + effects
+  let soundOn = localStorage.getItem("crok-game-sound") !== "off";
+  let actx = null;
+  let lastClack = 0;
+  let effects = [];      // transient visuals like the "20!" flash
 
   function newGame() {
     discs = [];
     sunk = [0, 0];
     left = [DISCS_PER_PLAYER, DISCS_PER_PLAYER];
+    matchScore = [0, 0];
+    round = 1;
+    firstPlayer = 0;
     turn = 0;
+    effects = [];
     phase = "aim";
     document.getElementById("overlay").style.display = "none";
     document.getElementById("mid").innerHTML = MID_DEFAULT;
     document.querySelector("#p1 .nm").textContent = vsCPU ? "Computer" : "Player 2";
     spawnActive();
     updateHud();
+  }
+
+  // End of a round: fold its scores into the match and start the next, or finish.
+  function endRoundOrMatch() {
+    if (round < matchRounds) {
+      matchScore[0] += scoreOf(0);
+      matchScore[1] += scoreOf(1);
+      stats.most20s = Math.max(stats.most20s, sunk[0], sunk[1]); saveStats();
+      round++;
+      firstPlayer = 1 - firstPlayer;
+      turn = firstPlayer;
+      left = [DISCS_PER_PLAYER, DISCS_PER_PLAYER];
+      sunk = [0, 0];
+      discs = [];
+      spawnActive();
+      updateHud();
+    } else {
+      endGame();
+    }
   }
 
   function spawnActive() {
@@ -277,6 +316,8 @@
     left[turn]--;
     active = null;
     phase = "sim";
+    sFlick();
+    buzz(10);
     updateHud();
   }
 
@@ -340,6 +381,7 @@
           sunk[d.player]++;                          // opponent disc potted = legal contact
           if (shot) shot.oppContacted = true;
         }
+        addEffect(cx, cy, "20!", "#f0c87a"); sSink(); buzz(25);
         discs.splice(i, 1); continue;
       }
       if (r > R + discR * 0.5) {                     // into the ditch (scores nothing)
@@ -370,6 +412,7 @@
     const imp = (1 + REST_DISC) * vn / 2;
     a.vx -= imp * nx; a.vy -= imp * ny;
     b.vx += imp * nx; b.vy += imp * ny;
+    if (vn > 1.5) sDisc();
   }
 
   function collidePeg(d, p) {
@@ -384,6 +427,7 @@
     if (vn < 0) {
       d.vx -= (1 + REST_PEG) * vn * nx;
       d.vy -= (1 + REST_PEG) * vn * ny;
+      if (vn < -1.5) sPeg();
     }
   }
 
@@ -449,7 +493,7 @@
     const other = 1 - turn;
     if (left[other] > 0) turn = other;
     else if (left[turn] > 0) { /* same player continues */ }
-    else { endGame(); updateHud(); return; }
+    else { endRoundOrMatch(); return; }
     spawnActive();
     updateHud();
   }
@@ -458,8 +502,9 @@
     if (phase === "over") return;
     phase = "over";
     active = null;
-    const s0 = scoreOf(0), s1 = scoreOf(1);
+    const s0 = totalScore(0), s1 = totalScore(1);
     recordStats(s0, s1);
+    if (s0 !== s1) sWin();
     const res = document.getElementById("result");
     const sub = document.getElementById("resultSub");
     const nm = (i) => (i === 1 && vsCPU) ? "Computer" : "Player " + (i + 1);
@@ -515,14 +560,40 @@
     document.getElementById("rec-body").innerHTML = html;
   }
 
+  // ---- sound + haptics ----
+  function tone(freq, dur, type, vol, delay) {
+    if (!soundOn) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === "suspended") actx.resume();
+      const t = actx.currentTime + (delay || 0);
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || "triangle"; o.frequency.value = freq;
+      g.gain.setValueAtTime(vol || 0.04, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(actx.destination);
+      o.start(t); o.stop(t + dur + 0.03);
+    } catch (e) {}
+  }
+  const sFlick = () => tone(1150, 0.05, "square", 0.03);
+  function sPeg() { const n = performance.now(); if (n - lastClack < 35) return; lastClack = n; tone(620, 0.05, "square", 0.035); }
+  function sDisc() { const n = performance.now(); if (n - lastClack < 35) return; lastClack = n; tone(300, 0.05, "triangle", 0.045); }
+  function sSink() { tone(880, 0.12, "triangle", 0.05); tone(1320, 0.2, "triangle", 0.05, 0.09); }
+  function sWin() { [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.28, "triangle", 0.06, i * 0.12)); }
+  function buzz(ms) { if (navigator.vibrate) { try { navigator.vibrate(ms); } catch (e) {} } }
+  function addEffect(x, y, text, color) { effects.push({ x: x, y: y, text: text, color: color, t0: performance.now() }); }
+
   // ---- HUD ----
+  function totalScore(p) { return matchScore[p] + scoreOf(p); }
   function updateHud() {
-    document.querySelector("#p0 .sc").textContent = scoreOf(0);
-    document.querySelector("#p1 .sc").textContent = scoreOf(1);
+    document.querySelector("#p0 .sc").textContent = totalScore(0);
+    document.querySelector("#p1 .sc").textContent = totalScore(1);
     document.querySelector("#p0 .dl").textContent = left[0] + " discs";
     document.querySelector("#p1 .dl").textContent = left[1] + " discs";
     document.getElementById("p0").classList.toggle("turn", phase !== "over" && turn === 0);
     document.getElementById("p1").classList.toggle("turn", phase !== "over" && turn === 1);
+    document.getElementById("roundLabel").textContent =
+      matchRounds > 1 ? "Round " + Math.min(round, matchRounds) + " of " + matchRounds : "";
     const human = phase === "aim" && active && !(vsCPU && turn === 1);
     document.getElementById("place").style.display = human ? "flex" : "none";
   }
@@ -554,6 +625,16 @@
     for (const p of PEGS) { ctx.beginPath(); ctx.arc(p.x, p.y, pegR, 0, 7); ctx.fill(); }
     // discs
     for (const d of discs) {
+      // motion trail for fast discs (faint ghosts behind the velocity)
+      const sp = Math.hypot(d.vx, d.vy);
+      if (sp > 2.5) {
+        for (let k = 1; k <= 2; k++) {
+          ctx.globalAlpha = 0.13 / k;
+          ctx.fillStyle = COLORS[d.player];
+          ctx.beginPath(); ctx.arc(d.x - d.vx * k * 0.6, d.y - d.vy * k * 0.6, discR, 0, 7); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
       const grad = ctx.createRadialGradient(d.x - discR * 0.3, d.y - discR * 0.3, discR * 0.2, d.x, d.y, discR);
       grad.addColorStop(0, COLORS[d.player]);
       grad.addColorStop(1, EDGE[d.player]);
@@ -561,6 +642,18 @@
       ctx.beginPath(); ctx.arc(d.x, d.y, discR, 0, 7); ctx.fill();
       ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(d.x, d.y, discR, 0, 7); ctx.stroke();
+    }
+    // transient effects (e.g. the "20!" flash) — float up and fade
+    const now = performance.now();
+    for (let i = effects.length - 1; i >= 0; i--) {
+      const e = effects[i], age = (now - e.t0) / 800;
+      if (age >= 1) { effects.splice(i, 1); continue; }
+      ctx.globalAlpha = 1 - age;
+      ctx.fillStyle = e.color;
+      ctx.font = "bold " + (discR * (1.6 + age)) + "px system-ui, sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(e.text, e.x, e.y - age * 34);
+      ctx.globalAlpha = 1;
     }
     // placement arc: the range the slider can position the disc along
     if (phase === "aim" && active && !(vsCPU && turn === 1)) {
@@ -651,6 +744,19 @@
     aiLevel = AI_ORDER[(AI_ORDER.indexOf(aiLevel) + 1) % AI_ORDER.length];
     this.textContent = "Difficulty: " + aiLevel;
   });
+  document.getElementById("roundsBtn").addEventListener("click", function () {
+    matchRounds = ROUND_OPTS[(ROUND_OPTS.indexOf(matchRounds) + 1) % ROUND_OPTS.length];
+    this.textContent = "Rounds: " + matchRounds;
+    newGame();
+  });
+  const soundBtn = document.getElementById("soundBtn");
+  soundBtn.textContent = soundOn ? "🔊" : "🔇";
+  soundBtn.addEventListener("click", function () {
+    soundOn = !soundOn;
+    localStorage.setItem("crok-game-sound", soundOn ? "on" : "off");
+    this.textContent = soundOn ? "🔊" : "🔇";
+    if (soundOn) sSink();   // little confirmation blip
+  });
   document.getElementById("recBtn").addEventListener("click", function () {
     renderRecords();
     document.getElementById("records-modal").style.display = "flex";
@@ -668,7 +774,7 @@
       if (phase !== "aim" || !active) return;
       flick(vx, vy);
     },
-    state() { return { phase, turn, left: left.slice(), sunk: sunk.slice(), discs: discs.length, s0: scoreOf(0), s1: scoreOf(1), foul: lastFoul }; },
+    state() { return { phase, turn, left: left.slice(), sunk: sunk.slice(), discs: discs.length, s0: totalScore(0), s1: totalScore(1), round, rounds: matchRounds, match: matchScore.slice(), foul: lastFoul }; },
     tick(n) { for (let i = 0; i < n && phase === "sim"; i++) step(); }, // deterministic stepping for tests
     redraw() { draw(); },
     setMode(b) { vsCPU = b; },
