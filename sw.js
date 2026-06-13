@@ -1,4 +1,4 @@
-const CACHE = "crok-game-v1";
+const CACHE = "crok-game-v2";
 const ASSETS = [
   ".",
   "index.html",
@@ -14,6 +14,7 @@ self.addEventListener("install", (e) => {
       c.addAll(ASSETS.map((u) => new Request(u, { cache: "no-cache" })))
     )
   );
+  self.skipWaiting();
 });
 
 self.addEventListener("message", (e) => {

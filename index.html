@@ -87,8 +87,10 @@
     <strong>How to play:</strong> Players take turns. On your turn a disc appears
     at your edge — press and drag in the direction you want to shoot (further drag =
     more power), then release to flick. Land in the centre hole for 20, or score by
-    ring (15 / 10 / 5). Discs knocked into the ditch are out. Highest total after all
-    discs are played wins.
+    ring (15 / 10 / 5). Discs knocked into the ditch are out. <strong>If your opponent
+    has a disc on the board you must hit one</strong> (directly or off your own discs)
+    or your shot is removed; on an open board your shot must reach the centre 20 zone.
+    Highest total after all discs are played wins.
   </div>
 
 <script>
@@ -145,6 +147,9 @@
   let phase = "aim";       // "aim" | "sim" | "over"
   let active = null;       // the disc awaiting a flick
   let aim = null;          // {x,y} current pointer while dragging
+  let shot = null;         // per-shot tracking for the must-hit rule
+  let lastFoul = null;     // reason string of the most recent foul (or null)
+  let msgTimer = null;
 
   function newGame() {
     discs = [];
@@ -162,6 +167,28 @@
     active = { x: START[turn].x, y: START[turn].y, vx: 0, vy: 0, player: turn, flicked: false };
     discs.push(active);
     phase = "aim";
+  }
+
+  // Launch the active disc and start tracking the shot for the must-hit rule.
+  function flick(vx, vy) {
+    if (!active) return;
+    const shooter = active;
+    shooter.vx = vx; shooter.vy = vy; shooter.flicked = true;
+    const opp = 1 - turn;
+    shot = {
+      shooter: shooter,
+      player: turn,
+      oppHad: discs.some((d) => d !== shooter && d.player === opp),
+      pre: new Map(),
+      oppContacted: false,
+      shooterSunk: false,
+      ownSunk: 0,
+    };
+    for (const d of discs) shot.pre.set(d, { x: d.x, y: d.y });
+    left[turn]--;
+    active = null;
+    phase = "sim";
+    updateHud();
   }
 
   function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
@@ -214,8 +241,20 @@
       const d = discs[i];
       if (d === active && !d.flicked) continue;
       const r = dist(d.x, d.y, cx, cy);
-      if (r < holeR && speed(d) < SINK) { sunk[d.player]++; discs.splice(i, 1); continue; }
-      if (r > R + discR * 0.5) { discs.splice(i, 1); continue; } // into the ditch
+      if (r < holeR && speed(d) < SINK) {
+        if (shot && d.player === shot.player) {
+          // own 20s are deferred until the foul check (a foul voids them)
+          if (d === shot.shooter) shot.shooterSunk = true; else shot.ownSunk++;
+        } else {
+          sunk[d.player]++;                          // opponent disc potted = legal contact
+          if (shot) shot.oppContacted = true;
+        }
+        discs.splice(i, 1); continue;
+      }
+      if (r > R + discR * 0.5) {                     // into the ditch (scores nothing)
+        if (shot && d !== shot.shooter && d.player !== shot.player) shot.oppContacted = true;
+        discs.splice(i, 1); continue;
+      }
     }
     // settled?
     let moving = false;
@@ -257,7 +296,65 @@
     }
   }
 
+  // Enforce the must-hit rule once the discs have come to rest.
+  function resolveShot() {
+    if (!shot) return;
+    const s = shot; shot = null;
+    lastFoul = null;
+
+    // contact = an opponent disc moved or was removed by the shot
+    let oppContacted = s.oppContacted;
+    if (!oppContacted) {
+      for (const d of discs) {
+        if (d.player !== s.player) {
+          const p0 = s.pre.get(d);
+          if (p0 && Math.hypot(d.x - p0.x, d.y - p0.y) > 0.5) { oppContacted = true; break; }
+        }
+      }
+    }
+
+    let foul = false, reason = "";
+    if (s.oppHad) {
+      if (!oppContacted) { foul = true; reason = "must hit an opponent disc"; }
+    } else if (!s.shooterSunk) {
+      // open board: the shot must reach (touch) the 15 circle, or sink the 20
+      const onBoard = discs.indexOf(s.shooter) >= 0;
+      if (!onBoard) { foul = true; reason = "must reach the 20 zone"; }
+      else if (dist(s.shooter.x, s.shooter.y, cx, cy) - discR > line15) {
+        foul = true; reason = "must reach the 20 zone";
+      }
+    }
+
+    if (!foul) {
+      if (s.shooterSunk) sunk[s.player]++;           // count deferred own 20s
+      sunk[s.player] += s.ownSunk;
+    } else {
+      const idx = discs.indexOf(s.shooter);
+      if (idx >= 0) discs.splice(idx, 1);            // remove the shooter
+      for (let i = discs.length - 1; i >= 0; i--) {  // and any own discs it moved
+        const d = discs[i];
+        if (d.player === s.player) {
+          const p0 = s.pre.get(d);
+          if (p0 && Math.hypot(d.x - p0.x, d.y - p0.y) > 0.5) discs.splice(i, 1);
+        }
+      }
+      lastFoul = reason;
+      flashMessage("Foul — " + reason);
+    }
+    updateHud();
+  }
+
+  function flashMessage(txt) {
+    const mid = document.getElementById("mid");
+    mid.innerHTML = '<span style="color:#e0856a">' + txt + "</span>";
+    clearTimeout(msgTimer);
+    msgTimer = setTimeout(function () {
+      mid.innerHTML = "Drag from your disc to aim,<br>release to flick";
+    }, 2800);
+  }
+
   function afterSettle() {
+    resolveShot();
     const other = 1 - turn;
     if (left[other] > 0) turn = other;
     else if (left[turn] > 0) { /* same player continues */ }
@@ -373,13 +470,7 @@
     if (len < 6) return; // too small, ignore
     const pow = Math.min(len, MAX_DRAG) / MAX_DRAG * MAX_SPEED;
     const ang = Math.atan2(dy, dx);
-    active.vx = Math.cos(ang) * pow;
-    active.vy = Math.sin(ang) * pow;
-    active.flicked = true;
-    left[turn]--;
-    active = null;
-    phase = "sim";
-    updateHud();
+    flick(Math.cos(ang) * pow, Math.sin(ang) * pow);
   });
 
   document.getElementById("newGame").addEventListener("click", newGame);
@@ -389,10 +480,9 @@
   window.crok = {
     launch(vx, vy) {
       if (phase !== "aim" || !active) return;
-      active.vx = vx; active.vy = vy; active.flicked = true;
-      left[turn]--; active = null; phase = "sim"; updateHud();
+      flick(vx, vy);
     },
-    state() { return { phase, turn, left: left.slice(), sunk: sunk.slice(), discs: discs.length, s0: scoreOf(0), s1: scoreOf(1) }; },
+    state() { return { phase, turn, left: left.slice(), sunk: sunk.slice(), discs: discs.length, s0: scoreOf(0), s1: scoreOf(1), foul: lastFoul }; },
     tick(n) { for (let i = 0; i < n && phase === "sim"; i++) step(); }, // deterministic stepping for tests
     redraw() { draw(); },
   };
