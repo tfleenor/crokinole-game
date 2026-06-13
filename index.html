@@ -60,7 +60,8 @@
   }
   button:active { filter: brightness(1.1); }
   #help { max-width: 520px; color: #a8957c; font-size: 0.85rem; line-height: 1.5; margin-top: 12px; }
-  #newGame { margin-top: 10px; background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; }
+  #controls { display: flex; gap: 10px; margin-top: 10px; }
+  #newGame, #vsToggle { background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; }
 </style>
 </head>
 <body>
@@ -81,7 +82,10 @@
     </div></div>
   </div>
 
-  <button id="newGame">New Game</button>
+  <div id="controls">
+    <button id="vsToggle">Mode: 2 Players</button>
+    <button id="newGame">New Game</button>
+  </div>
 
   <div id="help">
     <strong>How to play:</strong> Players take turns. On your turn a disc appears
@@ -156,6 +160,7 @@
   let lastFoul = null;     // reason string of the most recent foul (or null)
   let msgTimer = null;
   let dragMode = null;     // null | "move" (sliding the disc) | "aim"
+  let vsCPU = false;       // is Player 2 the computer?
   const MID_DEFAULT = "Slide the disc to place it,<br>then drag to aim & flick";
 
   function newGame() {
@@ -166,6 +171,7 @@
     phase = "aim";
     document.getElementById("overlay").style.display = "none";
     document.getElementById("mid").innerHTML = MID_DEFAULT;
+    document.querySelector("#p1 .nm").textContent = vsCPU ? "Computer" : "Player 2";
     spawnActive();
     updateHud();
   }
@@ -176,6 +182,37 @@
     active = { x: cx + START_R * Math.cos(a), y: cy + START_R * Math.sin(a), vx: 0, vy: 0, player: turn, flicked: false };
     discs.push(active);
     phase = "aim";
+    if (vsCPU && turn === 1) {
+      document.getElementById("mid").innerHTML = "Computer is lining up…";
+      setTimeout(aiMove, 850);
+    } else {
+      document.getElementById("mid").innerHTML = MID_DEFAULT;
+    }
+  }
+
+  // Computer opponent: go for the 20 on an open board, otherwise hit a disc.
+  function aiMove() {
+    if (!vsCPU || turn !== 1 || phase !== "aim" || !active) return;
+    const opp = 1 - turn;
+    const oppDiscs = discs.filter((d) => d !== active && d.player === opp);
+    let tx, ty, power;
+    if (oppDiscs.length === 0) {
+      tx = cx; ty = cy;                                  // open board: attack the 20
+      power = dist(active.x, active.y, cx, cy) * 0.018 + 0.3;
+    } else {
+      let best = oppDiscs[0], bestVal = -1;              // prefer the disc nearest centre
+      for (const d of oppDiscs) {
+        const v = 1 / (dist(d.x, d.y, cx, cy) + 1);
+        if (v > bestVal) { bestVal = v; best = d; }
+      }
+      tx = best.x; ty = best.y;
+      power = dist(active.x, active.y, tx, ty) * 0.018 + 2.2;  // hit hard enough to clear it
+    }
+    let ang = Math.atan2(ty - active.y, tx - active.x);
+    ang += (Math.random() - 0.5) * 0.10;                 // aim jitter (~±3°)
+    power *= 0.92 + Math.random() * 0.16;                // power jitter (±8%)
+    power = Math.min(power, MAX_SPEED);
+    flick(Math.cos(ang) * power, Math.sin(ang) * power);
   }
 
   // Launch the active disc and start tracking the shot for the must-hit rule.
@@ -490,6 +527,7 @@
   }
   canvas.addEventListener("pointerdown", (e) => {
     if (phase !== "aim" || !active) return;
+    if (vsCPU && turn === 1) return;          // computer's turn — no human input
     canvas.setPointerCapture(e.pointerId);
     const p = pointFromEvent(e);
     if (Math.hypot(p.x - active.x, p.y - active.y) <= GRAB) {
@@ -527,6 +565,11 @@
 
   document.getElementById("newGame").addEventListener("click", newGame);
   document.getElementById("again").addEventListener("click", newGame);
+  document.getElementById("vsToggle").addEventListener("click", function () {
+    vsCPU = !vsCPU;
+    this.textContent = "Mode: " + (vsCPU ? "vs Computer" : "2 Players");
+    newGame();
+  });
 
   // test hook (harmless; used for automated render/physics checks)
   window.crok = {
@@ -537,6 +580,8 @@
     state() { return { phase, turn, left: left.slice(), sunk: sunk.slice(), discs: discs.length, s0: scoreOf(0), s1: scoreOf(1), foul: lastFoul }; },
     tick(n) { for (let i = 0; i < n && phase === "sim"; i++) step(); }, // deterministic stepping for tests
     redraw() { draw(); },
+    setMode(b) { vsCPU = b; },
+    cpu() { aiMove(); },
   };
 
   newGame();
