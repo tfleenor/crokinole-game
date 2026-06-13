@@ -61,8 +61,20 @@
   button:active { filter: brightness(1.1); }
   #help { max-width: 520px; color: #a8957c; font-size: 0.85rem; line-height: 1.5; margin-top: 12px; }
   #controls { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
-  #newGame, #vsToggle, #diffToggle { background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; padding: 10px 13px; font-size: 0.92rem; }
+  #newGame, #vsToggle, #diffToggle, #recBtn { background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; padding: 10px 13px; font-size: 0.92rem; }
   #diffToggle { display: none; }
+  #records-modal {
+    position: fixed; inset: 0; z-index: 50; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(15, 10, 6, 0.82); padding: 20px;
+  }
+  .rec-card { background: #2a211a; border: 2px solid #d4a04c; border-radius: 16px; padding: 22px 24px; width: min(92vw, 360px); }
+  .rec-card h2 { margin: 0 0 14px; color: #d4a04c; text-align: center; }
+  .rec-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid #3e3024; font-size: 0.95rem; }
+  .rec-row span { color: #a8957c; }
+  .rec-card button { margin-top: 14px; width: 100%; }
+  .rec-reset { background: none; border: 1px solid #c4553d; color: #c4553d; }
+  #rec-close { background: #2a211a; border: 1px solid #3e3024; color: #f3ead9; }
   #place { display: none; align-items: center; gap: 10px; width: 100%; max-width: 520px; margin-top: 12px; }
   #place .parrow { color: #a8957c; font-size: 1.1rem; user-select: none; }
   #slider { flex: 1; height: 30px; accent-color: #b07a33; }
@@ -96,6 +108,16 @@
     <button id="vsToggle">Mode: 2 Players</button>
     <button id="diffToggle">Difficulty: Medium</button>
     <button id="newGame">New Game</button>
+    <button id="recBtn">Records</button>
+  </div>
+
+  <div id="records-modal">
+    <div class="rec-card">
+      <h2>Records</h2>
+      <div id="rec-body"></div>
+      <button id="rec-reset" class="rec-reset">Reset records</button>
+      <button id="rec-close">Close</button>
+    </div>
   </div>
 
   <div id="help">
@@ -179,6 +201,8 @@
     Hard: { ang: 0.035, pow: 0.07 },
   };
   const MID_DEFAULT = "Use the slider to position,<br>then drag the board to flick";
+  const STATS_KEY = "crok-game-stats-v1";
+  let stats = loadStats();
 
   function newGame() {
     discs = [];
@@ -431,16 +455,64 @@
   }
 
   function endGame() {
+    if (phase === "over") return;
     phase = "over";
     active = null;
     const s0 = scoreOf(0), s1 = scoreOf(1);
+    recordStats(s0, s1);
     const res = document.getElementById("result");
     const sub = document.getElementById("resultSub");
-    if (s0 === s1) { res.textContent = "It's a tie!"; }
-    else { res.textContent = (s0 > s1 ? "Player 1" : "Player 2") + " wins!"; }
-    sub.textContent = "Player 1 " + s0 + "  –  " + s1 + " Player 2";
+    const nm = (i) => (i === 1 && vsCPU) ? "Computer" : "Player " + (i + 1);
+    if (s0 === s1) res.textContent = "It's a tie!";
+    else res.textContent = nm(s0 > s1 ? 0 : 1) + " wins!";
+    let line = "Player 1 " + s0 + "  –  " + s1 + "  " + (vsCPU ? "Computer" : "Player 2");
+    if (vsCPU && s0 > s1 && stats.streak > 1) line += "  ·  streak " + stats.streak;
+    sub.textContent = line;
     document.getElementById("overlay").style.display = "flex";
     updateHud();
+  }
+
+  // ---------- records (stored on this device) ----------
+  function defaultStats() {
+    return {
+      cpu: { Easy: { w: 0, l: 0, t: 0 }, Medium: { w: 0, l: 0, t: 0 }, Hard: { w: 0, l: 0, t: 0 } },
+      twoP: { w0: 0, w1: 0, t: 0 },
+      bestScore: 0, most20s: 0, streak: 0, bestStreak: 0, games: 0,
+    };
+  }
+  function loadStats() {
+    try { const r = localStorage.getItem(STATS_KEY); if (r) return Object.assign(defaultStats(), JSON.parse(r)); } catch (e) {}
+    return defaultStats();
+  }
+  function saveStats() { try { localStorage.setItem(STATS_KEY, JSON.stringify(stats)); } catch (e) {} }
+  function recordStats(s0, s1) {
+    stats.games++;
+    stats.bestScore = Math.max(stats.bestScore, s0, s1);
+    stats.most20s = Math.max(stats.most20s, sunk[0], sunk[1]);
+    const winner = s0 === s1 ? -1 : (s0 > s1 ? 0 : 1);
+    if (vsCPU) {
+      const c = stats.cpu[aiLevel];
+      if (winner === 0) { c.w++; stats.streak++; stats.bestStreak = Math.max(stats.bestStreak, stats.streak); }
+      else if (winner === 1) { c.l++; stats.streak = 0; }
+      else c.t++;
+    } else {
+      if (winner === 0) stats.twoP.w0++;
+      else if (winner === 1) stats.twoP.w1++;
+      else stats.twoP.t++;
+    }
+    saveStats();
+  }
+  function renderRecords() {
+    const s = stats;
+    const row = (label, val) => '<div class="rec-row"><span>' + label + '</span><strong>' + val + '</strong></div>';
+    const cpuRow = (lvl) => { const c = s.cpu[lvl]; return row("vs Computer · " + lvl, c.w + "–" + c.l + (c.t ? " (" + c.t + "T)" : "")); };
+    let html = cpuRow("Easy") + cpuRow("Medium") + cpuRow("Hard");
+    html += row("Win streak vs Computer", s.streak + " (best " + s.bestStreak + ")");
+    if (s.twoP.w0 || s.twoP.w1 || s.twoP.t) html += row("2-player · P1–P2", s.twoP.w0 + "–" + s.twoP.w1 + (s.twoP.t ? " (" + s.twoP.t + "T)" : ""));
+    html += row("Best game score", s.bestScore);
+    html += row("Most 20s in a game", s.most20s);
+    html += row("Games played", s.games);
+    document.getElementById("rec-body").innerHTML = html;
   }
 
   // ---- HUD ----
@@ -578,6 +650,16 @@
   document.getElementById("diffToggle").addEventListener("click", function () {
     aiLevel = AI_ORDER[(AI_ORDER.indexOf(aiLevel) + 1) % AI_ORDER.length];
     this.textContent = "Difficulty: " + aiLevel;
+  });
+  document.getElementById("recBtn").addEventListener("click", function () {
+    renderRecords();
+    document.getElementById("records-modal").style.display = "flex";
+  });
+  document.getElementById("rec-close").addEventListener("click", function () {
+    document.getElementById("records-modal").style.display = "none";
+  });
+  document.getElementById("rec-reset").addEventListener("click", function () {
+    if (confirm("Reset all records?")) { stats = defaultStats(); saveStats(); renderRecords(); }
   });
 
   // test hook (harmless; used for automated render/physics checks)
