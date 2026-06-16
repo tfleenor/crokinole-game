@@ -135,6 +135,9 @@
     ring (15 / 10 / 5). Discs knocked into the ditch are out. <strong>If your opponent
     has a disc on the board you must hit one</strong> (directly or off your own discs)
     or your shot is removed; on an open board your shot must reach the centre 20 zone.
+    <strong>Aim guide:</strong> the dotted aim line only appears when you must hit an
+    opponent's disc. On an open board (a clear shot at the 20) there's <em>no</em> aim
+    line, so going for 20s is a genuine test of touch — line it up by eye.
     Highest total after all discs are played wins.
   </div>
 
@@ -211,6 +214,14 @@
     Hard: { ang: 0.035, pow: 0.07 },
   };
   const MID_DEFAULT = "Use the slider to position,<br>then drag the board to flick";
+  // Hint shown on the human's turn. On an open board there's no aim line, so
+  // flag it (and nudge the controls) instead of the default prompt.
+  function humanHint() {
+    const mustHit = discs.some((d) => d !== active && d.player === 1 - turn);
+    return mustHit
+      ? MID_DEFAULT
+      : "Open board — no aim line.<br>Slide, then flick to sink the 20 by eye.";
+  }
   const STATS_KEY = "crok-game-stats-v1";
   let stats = loadStats();
   // multi-round match
@@ -272,7 +283,7 @@
       document.getElementById("mid").innerHTML = "Computer is lining up…";
       setTimeout(aiMove, 850);
     } else {
-      document.getElementById("mid").innerHTML = MID_DEFAULT;
+      document.getElementById("mid").innerHTML = humanHint();
     }
   }
 
@@ -524,7 +535,9 @@
     mid.innerHTML = '<span style="color:#e0856a">' + txt + "</span>";
     clearTimeout(msgTimer);
     msgTimer = setTimeout(function () {
-      mid.innerHTML = MID_DEFAULT;
+      if (phase === "aim" && active && vsCPU && turn === 1) mid.innerHTML = "Computer is lining up…";
+      else if (phase === "aim" && active) mid.innerHTML = humanHint();
+      else mid.innerHTML = MID_DEFAULT;
     }, 2800);
   }
 
@@ -713,28 +726,34 @@
       const drag = Math.hypot(dx, dy);
       if (drag > 0.0001) {
         const ang = Math.atan2(dy, dx);
-        const dirx = Math.cos(ang), diry = Math.sin(ang);
-        // project the ray forward to the board rim so the guide stays on the board
-        const fx = active.x - cx, fy = active.y - cy;
-        const b = 2 * (fx * dirx + fy * diry);
-        const c = fx * fx + fy * fy - R * R;
-        const tRim = (-b + Math.sqrt(Math.max(0, b * b - 4 * c))) / 2;
-        const guideLen = Math.max(discR * 2, Math.min(R, tRim));
-        const ex = active.x + dirx * guideLen, ey = active.y + diry * guideLen;
-        ctx.strokeStyle = "rgba(255,255,255,0.55)";
-        ctx.lineWidth = 3;
-        ctx.setLineDash([6, 6]);
-        ctx.beginPath(); ctx.moveTo(active.x, active.y); ctx.lineTo(ex, ey); ctx.stroke();
-        ctx.setLineDash([]);
-        // arrowhead at the far end to make the aim direction obvious
-        const ah = discR * 1.2;
-        ctx.fillStyle = "rgba(255,255,255,0.75)";
-        ctx.beginPath();
-        ctx.moveTo(ex, ey);
-        ctx.lineTo(ex - Math.cos(ang - 0.42) * ah, ey - Math.sin(ang - 0.42) * ah);
-        ctx.lineTo(ex - Math.cos(ang + 0.42) * ah, ey - Math.sin(ang + 0.42) * ah);
-        ctx.closePath(); ctx.fill();
-        // power ring on the active disc
+        // The directional aim line is only shown when you MUST play off an
+        // opponent's disc. On an open board (a clear run at the 20) it's
+        // hidden on purpose, so sinking 20s is a real test of touch.
+        const mustHit = discs.some((d) => d !== active && d.player === 1 - turn);
+        if (mustHit) {
+          const dirx = Math.cos(ang), diry = Math.sin(ang);
+          // project the ray forward to the board rim so the guide stays on the board
+          const fx = active.x - cx, fy = active.y - cy;
+          const b = 2 * (fx * dirx + fy * diry);
+          const c = fx * fx + fy * fy - R * R;
+          const tRim = (-b + Math.sqrt(Math.max(0, b * b - 4 * c))) / 2;
+          const guideLen = Math.max(discR * 2, Math.min(R, tRim));
+          const ex = active.x + dirx * guideLen, ey = active.y + diry * guideLen;
+          ctx.strokeStyle = "rgba(255,255,255,0.55)";
+          ctx.lineWidth = 3;
+          ctx.setLineDash([6, 6]);
+          ctx.beginPath(); ctx.moveTo(active.x, active.y); ctx.lineTo(ex, ey); ctx.stroke();
+          ctx.setLineDash([]);
+          // arrowhead at the far end to make the aim direction obvious
+          const ah = discR * 1.2;
+          ctx.fillStyle = "rgba(255,255,255,0.75)";
+          ctx.beginPath();
+          ctx.moveTo(ex, ey);
+          ctx.lineTo(ex - Math.cos(ang - 0.42) * ah, ey - Math.sin(ang - 0.42) * ah);
+          ctx.lineTo(ex - Math.cos(ang + 0.42) * ah, ey - Math.sin(ang + 0.42) * ah);
+          ctx.closePath(); ctx.fill();
+        }
+        // power ring on the active disc (always shown while dragging)
         const pow = Math.min(drag, MAX_DRAG) / MAX_DRAG;
         ctx.strokeStyle = pow > 0.85 ? "#c4553d" : "#d4a04c";
         ctx.lineWidth = 3;
